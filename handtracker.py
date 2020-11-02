@@ -98,7 +98,7 @@ def pressArrowKeys(v):
     global lak,rak,uak,dak
     l,r,u,d = (False,False,False,False)
     angle = np.arctan2(-v[1], -v[0])
-    print(angle*180/np.pi)
+    #print(angle*180/np.pi)
     if angle >= -3*np.pi/8 and angle <= 3*np.pi/8:
         r = True
     if angle >= np.pi/8 and angle <= 7*np.pi/8:
@@ -395,7 +395,7 @@ while True:
                         if b_squared < 500:
                             continue
 
-                        if angle <= np.pi * (110 / 180) and not isOnBorder(start):
+                        if angle <= np.pi * (90 / 180) and not isOnBorder(start):
                             fingerCount += 1
                             fingertipPositions.append(start)
                         prev_start = start
@@ -561,11 +561,11 @@ while True:
             finger3_start = None
 
     #2-finger zoom
-    if fingerCount == 2 and ellipse is None and not countdown:
-    #    zoom_window[window_index % len(zoom_window)] = (finger_angle,)
-    #else:
-    #    zoom_window[window_index % len(zoom_window)] = None
-    #if isActive(zoom_window):
+    if fingerCount == 2 and not shaka and ellipse is None and not countdown:
+        zoom_window[window_index % len(zoom_window)] = (finger_angle,)
+    else:
+        zoom_window[window_index % len(zoom_window)] = None
+    if isActive(zoom_window):
         #avg, = avgTuples(zoom_window)
         avg = finger_angle
         if previous_angle is None:
@@ -574,7 +574,7 @@ while True:
             angleDiff = angleDifference(avg, previous_angle)
             threshold = np.pi * (p["angle_threshold"][0]/180)
             clicks = 20
-            print(angleDiff*180/np.pi)
+            #print(angleDiff*180/np.pi)
 
             if angleDiff > threshold:
                 pyautogui.scroll(clicks)
