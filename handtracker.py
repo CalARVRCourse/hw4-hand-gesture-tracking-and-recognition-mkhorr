@@ -525,7 +525,9 @@ while True:
     if countdown or fingerCount == 5:
         if fingerCount == 0:
             countdown = False
-            pyautogui.press('r')
+            pyautogui.keyDown('command')
+            pyautogui.press('w')
+            pyautogui.keyUp('command')
         elif fingerCount == 5:
             countdown = True
             last_finger = 5
