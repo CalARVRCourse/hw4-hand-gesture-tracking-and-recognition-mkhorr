@@ -214,116 +214,34 @@ def findEllipse(thresh):
     return labeled_img, None, None, None
 
 
-while True:
-    ret, frame = cam.read()
-    if not ret:
-        break
-
-    #part 1
-    skin = apply_skin_mask(frame)
-
-    #part 2
-    ret, thresh = binarize_img(skin)
-    labeled_img, subImg, ellipse, roi = findEllipse(thresh)
-    if (ellipse != None):
-        (x,y),(MA,ma),angle = ellipse
-
-    #part 3
-    thresh = cv2.bitwise_not(thresh)
-    thresholdedHandImage = cv2.cvtColor(thresh,cv2.COLOR_GRAY2RGB)
-    _, contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    contours = sorted(contours,key=cv2.contourArea,reverse=True)
-    fingerCount = 0
-    if len(contours)>0:
-        largestContour = contours[0]
-        hull = cv2.convexHull(largestContour, returnPoints = False)
-        for cnt in contours[:1]:
-            defects = cv2.convexityDefects(cnt,hull)
-            if(not isinstance(defects,type(None))):
-                for i in range(defects.shape[0]):
-                    s,e,f,d = defects[i,0]
-                    start = tuple(cnt[s][0])
-                    end = tuple(cnt[e][0])
-                    far = tuple(cnt[f][0])
-
-                    c_squared = (end[0] - start[0]) ** 2 + (end[1] - start[1]) ** 2
-                    a_squared = (far[0] - start[0]) ** 2 + (far[1] - start[1]) ** 2
-                    b_squared = (end[0] - far[0]) ** 2 + (end[1] - far[1]) ** 2
-                    angle = np.arccos((a_squared + b_squared  - c_squared ) / (2 * np.sqrt(a_squared * b_squared )))    
-                      
-                    if angle <= np.pi * (80 / 180):
-                        fingerCount += 1
-                        cv2.circle(thresholdedHandImage, far, 4, [0, 0, 255], -1)
-
-                    cv2.line(thresholdedHandImage,start,end,[0,255,0],2)
-                
-                # addressing the case where there is only one finger
-                if fingerCount == 0:
-                    for i in range(defects.shape[0] * 2):
-                        s,e,f,d = defects[i % defects.shape[0],0]
-                        start = tuple(cnt[s][0])
-                        end = tuple(cnt[e][0])
-                        if i == 0:
-                            prev_start = start
-                            continue
-
-                        c_squared = (end[0] - prev_start[0]) ** 2 + (end[1] - prev_start[1]) ** 2
-                        a_squared = (start[0] - prev_start[0]) ** 2 + (start[1] - prev_start[1]) ** 2
-                        b_squared = (end[0] - start[0]) ** 2 + (end[1] - start[1]) ** 2
-                        angle = np.arccos((a_squared + b_squared  - c_squared ) / (2 * np.sqrt(a_squared * b_squared )))
-                        if b_squared < 500:
-                            continue
-
-                        if angle <= np.pi * (100 / 180) and not isOnBorder(start):
-                            fingerCount = 1
-                            break
-                        prev_start = start
-                else:
-                    fingerCount += 1
-
-    print("Finger Count: ", fingerCount)
-
-    # display the current image
-    cv2.imshow("Display", cv2.flip(thresholdedHandImage, 1))
-    # wait for 1ms or key press
-    k = cv2.waitKey(1) #k is the key pressed
-    if k == 27 or k==113:  #27, 113 are ascii for escape and q respectively
-        #exit
-        break
-
-
-
-
-
-
 
 #Part 4
 
 #sliding window for when the gestures is detected
 window_index = 0
+#handIndex
+point_window = [[None]*10, [None]*10]
+point_start = [None, None]
 
-point_window = [None]*10
-point_start = None
+shaka_window = [[None]*10, [None]*10]
+shaka_start = [None, None]
 
-shaka_window = [None]*10
-shaka_start = None
+finger3_window = [[None]*10, [None]*10]
+finger3_start = [None, None]
 
-finger3_window = [None]*10
-finger3_start = None
+circle_window = [[None]*10, [None]*10]
+circle_start = [None, None]
+circle_prev = [None, None]
 
-circle_window = [None]*10
-circle_start = None
-circle_prev = None
+area_window = [[None]*10, [None]*10]
+area_press = [False, False]
 
-area_window = [None]*10
-area_press = False
+zoom_window = [[None]*10, [None]*10]
+previous_angle = [None, None]
 
-zoom_window = [None]*10
-previous_angle = None
-
-countdown = False
-countdown_start_frame = 0
-last_finger = -1
+countdown = [False, False]
+countdown_start_frame = [0, 0]
+last_finger = [-1 ,-1]
 
 fps = 30
 prevTime = int(time.time()) / 1000
@@ -345,19 +263,47 @@ while True:
     ret, thresh = binarize_img(skin)
     labeled_img, subImg, ellipse, roi = findEllipse(thresh)
 
-    largestContour = None
     thresh = cv2.bitwise_not(thresh)
     thresholdedHandImage = cv2.cvtColor(thresh,cv2.COLOR_GRAY2RGB)
     _, contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     contours = sorted(contours,key=cv2.contourArea,reverse=True)
-    fingerCount = 0
-    fingertipPositions = []
-    shaka = False
-    finger_angle = 0
+    
     if len(contours)>0:
+        fingerCount = 0
+        fingertipPositions = []
+        shaka = False
+        finger_angle = 0
         largestContour = contours[0]
         hull = cv2.convexHull(largestContour, returnPoints = False)
-        for cnt in contours[:1]:
+        contours1 = contours[:min(2,len(contours))]
+        if len(contours) > 1:
+            secondLargestContour = contours[1]
+            hull1 = cv2.convexHull(secondLargestContour, returnPoints = False)
+
+            M1 = cv2.moments(largestContour)
+            x1 = int(M1["m10"] / M1["m00"])
+            y1 = int(M1["m01"] / M1["m00"])
+            try:
+                M2 = cv2.moments(secondLargestContour)
+                x2 = int(M2["m10"] / M2["m00"])
+                y2 = int(M2["m01"] / M2["m00"])
+            except:
+                contours1 = contours[:1]
+
+            #always process left hand first
+            if (x1 > x2):
+                temp = largestContour
+                largestContour = secondLargestContour
+                secondLargestContour = temp
+                temp = hull
+                hull = hull1
+                hull1 = temp
+                contours1.reverse()
+        
+        for handIndex, cnt in enumerate(contours1):
+            if handIndex == 1:
+                hull = hull1
+                largestContour = secondLargestContour
             defects = cv2.convexityDefects(cnt,hull)
             if(not isinstance(defects,type(None))):
                 for i in range(defects.shape[0]):
@@ -408,181 +354,181 @@ while True:
                     fingerCount += 1
     
 
-    print(fingerCount)
+            print(fingerCount)
 
-    # gestures
+            # gestures
 
-    #punch to click
-    if fingerCount == 0 and ellipse is None and largestContour is not None and not countdown:
-        area = cv2.contourArea(largestContour)
-        if area > 60000:
-            print("AREA: ", area)
-            area_window[window_index % len(area_window)] = True
-        else:
-            area_window[window_index % len(area_window)] = None
-    else:
-        area_window[window_index % len(area_window)] = None
-    if isActive(area_window):
-        if area_press == False:
-            print("CLICK")
-            pyautogui.click()
-            area_press = True
-    else:
-        area_press = False
-
-
-    # point to pan map
-    if fingerCount == 1 and ellipse is None and not countdown:
-        M = cv2.moments(largestContour)
-        x = int(M["m10"] / M["m00"])
-        y = int(M["m01"] / M["m00"])
-        px, py = fingertipPositions[0]
-        magnitude = ((px - x)**2 + (py - y)**2)**.5
-        pointerDirection = ((px - x) / magnitude, (py - y) / magnitude)
-        point_window[window_index % len(point_window)] = pointerDirection
-    else:
-        point_window[window_index % len(point_window)] = None
-    if isActive(point_window):
-        #currentPosition = pyautogui.position()
-        pointerDirection = avgTuples(point_window)
-        #scale = 30.0
-        #cx, cy = (currentPosition[0] - scale * pointerDirection[0],
-        #          currentPosition[1] + scale * pointerDirection[1])
-        #pyautogui.moveTo(cx, cy)
-        pressArrowKeys(pointerDirection)
-    else:
-        releaseArrowKeys()
-    
-    # shaka to rotate
-    if shaka and ellipse is None and not countdown:
-        leftX, leftY = fingertipPositions[0]
-        rightX, rightY = fingertipPositions[1]
-        shaka_window[window_index % len(shaka_window)] = (leftX, leftY, rightX, rightY)
-    else:
-        shaka_window[window_index % len(shaka_window)] = None
-    if isActive(shaka_window):
-        avg = avgTuples(shaka_window)
-        if shaka_start == None:
-            shaka_start = (avg, pyautogui.position())
-            pyautogui.keyDown('shift')
-            pyautogui.mouseDown()
-        else:
-            lX, lY, rX, rY = avg
-            (slX, slY, srX, srY), (sx, sy) = shaka_start
-
-            midX = (lX + rX) / 2
-            midY = (lY + rY) / 2
-            sMidX = (slX + srX) / 2
-            sMidY = (slY + srY) / 2
-
-            angle = np.arctan2(rY - midY, rX - midX)
-            sAngle = np.arctan2(srY - sMidY, srX - sMidX)
-
-            angleDiff = angleDifference(angle, sAngle)
-            factor = 500.0
-            pyautogui.moveTo(sx + factor * angleDiff, sy)
-    else:
-        if shaka_start is not None:
-            shaka_start = None
-            pyautogui.keyUp('shift')
-            pyautogui.mouseUp()
-    
-    # draw circle gesture
-    if ellipse is not None and not countdown:
-        print("ELLIPSE")
-        (xc,yc),(MA,ma),angle = ellipse
-        x, y, w, h = roi
-        circle_window[window_index % len(circle_window)] = (x+xc,y+yc)
-        #cv2.circle(thresholdedHandImage, (int(x+xc),int(y+yc)), 4, [0, 0, 255], -1)
-    else:
-        circle_window[window_index % len(circle_window)] = None
-    if isActive(circle_window):
-        avg = avgTuples(circle_window)
-        if circle_start is None:
-            circle_start = avg
-            circle_prev = avg
-        else:
-            scX = windowWidth / 2
-            scY = windowHeight / 2
-            #cv2.circle(thresholdedHandImage, (int(scX),int(scY)), 4, [0, 255, 0], -1)
-            start_angle = np.arctan2(circle_start[1] - scY, circle_start[0] - scX)
-            prev_angle = np.arctan2(circle_prev[1] - scY, circle_prev[0] - scX)
-            angle = np.arctan2(avg[1] - scY, avg[0] - scX)
-            print(angle*180/np.pi)
-            if angleDifference(angle, prev_angle) < 0:
-                circle_window[window_index % len(circle_window)] = None
-            elif angleDifference(prev_angle, start_angle) < 0 and angleDifference(angle, start_angle) > 0:
-                resetGesture(circle_window)
-                pyautogui.press('r')
+            #punch to click
+            if fingerCount == 0 and ellipse is None and largestContour is not None and not countdown[handIndex]:
+                area = cv2.contourArea(largestContour)
+                if area > 60000:
+                    print("AREA: ", area)
+                    area_window[handIndex][window_index % len(area_window[handIndex])] = True
+                else:
+                    area_window[handIndex][window_index % len(area_window[handIndex])] = None
             else:
-                circle_prev = avg
-    else:
-        if circle_start is not None:
-            circle_start = None
-            circle_prev = None
+                area_window[handIndex][window_index % len(area_window[handIndex])] = None
+            if isActive(area_window[handIndex]):
+                if area_press[handIndex] == False:
+                    print("CLICK")
+                    pyautogui.click()
+                    area_press[handIndex] = True
+            else:
+                area_press[handIndex] = False
+
+
+            # point to pan map
+            if fingerCount == 1 and ellipse is None and not countdown[handIndex]:
+                M = cv2.moments(largestContour)
+                x = int(M["m10"] / M["m00"])
+                y = int(M["m01"] / M["m00"])
+                px, py = fingertipPositions[0]
+                magnitude = ((px - x)**2 + (py - y)**2)**.5
+                pointerDirection = ((px - x) / magnitude, (py - y) / magnitude)
+                point_window[handIndex][window_index % len(point_window[handIndex])] = pointerDirection
+            else:
+                point_window[handIndex][window_index % len(point_window[handIndex])] = None
+            if isActive(point_window[handIndex]):
+                #currentPosition = pyautogui.position()
+                pointerDirection = avgTuples(point_window[handIndex])
+                #scale = 30.0
+                #cx, cy = (currentPosition[0] - scale * pointerDirection[0],
+                #          currentPosition[1] + scale * pointerDirection[1])
+                #pyautogui.moveTo(cx, cy)
+                pressArrowKeys(pointerDirection)
+            else:
+                releaseArrowKeys()
     
-    #countdown
-    if countdown or fingerCount == 5:
-        if fingerCount == 0:
-            countdown = False
-            pyautogui.keyDown('command')
-            pyautogui.press('w')
-            pyautogui.keyUp('command')
-        elif fingerCount == 5:
-            countdown = True
-            last_finger = 5
-            countdown_start_frame = window_index
-        elif fingerCount == last_finger or fingerCount == last_finger - 1:
-            last_finger = fingerCount
-            if window_index - countdown_start_frame > fps:
-                countdown = False
-        else:
-            countdown = False
+            # shaka to rotate
+            if shaka and ellipse is None and not countdown[handIndex]:
+                leftX, leftY = fingertipPositions[0]
+                rightX, rightY = fingertipPositions[1]
+                shaka_window[handIndex][window_index % len(shaka_window[handIndex])] = (leftX, leftY, rightX, rightY)
+            else:
+                shaka_window[handIndex][window_index % len(shaka_window[handIndex])] = None
+            if isActive(shaka_window[handIndex]):
+                avg = avgTuples(shaka_window[handIndex])
+                if shaka_start[handIndex] == None:
+                    shaka_start[handIndex] = (avg, pyautogui.position())
+                    pyautogui.keyDown('shift')
+                    pyautogui.mouseDown()
+                else:
+                    lX, lY, rX, rY = avg
+                    (slX, slY, srX, srY), (sx, sy) = shaka_start[handIndex]
 
-    #3-finger cursor
-    if fingerCount == 3 and ellipse is None and not countdown:
-        M = cv2.moments(largestContour)
-        x = int(M["m10"] / M["m00"])
-        y = int(M["m01"] / M["m00"])
-        finger3_window[window_index % len(finger3_window)] = (x, y)
-    else:
-        finger3_window[window_index % len(finger3_window)] = None
-    if isActive(finger3_window):
-        avg = avgTuples(finger3_window)
-        if finger3_start == None:
-            finger3_start = (avg, pyautogui.position())
-        else:
-            (sX, sY), (cX, cY) = finger3_start
-            x, y = avg
-            scale = 3.0
-            pyautogui.moveTo(cX - scale * (x - sX), cY + scale * (y - sY))
-    else:
-        if finger3_start is not None:
-            finger3_start = None
+                    midX = (lX + rX) / 2
+                    midY = (lY + rY) / 2
+                    sMidX = (slX + srX) / 2
+                    sMidY = (slY + srY) / 2
 
-    #2-finger zoom
-    if fingerCount == 2 and not shaka and ellipse is None and not countdown:
-        zoom_window[window_index % len(zoom_window)] = (finger_angle,)
-    else:
-        zoom_window[window_index % len(zoom_window)] = None
-    if isActive(zoom_window):
-        #avg, = avgTuples(zoom_window)
-        avg = finger_angle
-        if previous_angle is None:
-            previous_angle = avg
-        else:
-            angleDiff = angleDifference(avg, previous_angle)
-            threshold = np.pi * (p["angle_threshold"][0]/180)
-            clicks = 20
-            #print(angleDiff*180/np.pi)
+                    angle = np.arctan2(rY - midY, rX - midX)
+                    sAngle = np.arctan2(srY - sMidY, srX - sMidX)
 
-            if angleDiff > threshold:
-                pyautogui.scroll(clicks)
-            elif angleDiff < -threshold:
-                pyautogui.scroll(-clicks)
-            previous_angle = avg
-    else:
-        previous_angle = None
+                    angleDiff = angleDifference(angle, sAngle)
+                    factor = 500.0
+                    pyautogui.moveTo(sx + factor * angleDiff, sy)
+            else:
+                if shaka_start[handIndex] is not None:
+                    shaka_start[handIndex] = None
+                    pyautogui.keyUp('shift')
+                    pyautogui.mouseUp()
+    
+            # draw circle gesture
+            if ellipse is not None and not countdown[handIndex]:
+                print("ELLIPSE")
+                (xc,yc),(MA,ma),angle = ellipse
+                x, y, w, h = roi
+                circle_window[handIndex][window_index % len(circle_window[handIndex])] = (x+xc,y+yc)
+                #cv2.circle(thresholdedHandImage, (int(x+xc),int(y+yc)), 4, [0, 0, 255], -1)
+            else:
+                circle_window[handIndex][window_index % len(circle_window[handIndex])] = None
+            if isActive(circle_window[handIndex]):
+                avg = avgTuples(circle_window[handIndex])
+                if circle_start[handIndex] is None:
+                    circle_start[handIndex] = avg
+                    circle_prev[handIndex] = avg
+                else:
+                    scX = windowWidth / 2
+                    scY = windowHeight / 2
+                    #cv2.circle(thresholdedHandImage, (int(scX),int(scY)), 4, [0, 255, 0], -1)
+                    start_angle = np.arctan2(circle_start[handIndex][1] - scY, circle_start[handIndex][0] - scX)
+                    prev_angle = np.arctan2(circle_prev[handIndex][1] - scY, circle_prev[handIndex][0] - scX)
+                    angle = np.arctan2(avg[1] - scY, avg[0] - scX)
+                    print(angle*180/np.pi)
+                    if angleDifference(angle, prev_angle) < 0:
+                        circle_window[handIndex][window_index % len(circle_window[handIndex])] = None
+                    elif angleDifference(prev_angle, start_angle) < 0 and angleDifference(angle, start_angle) > 0:
+                        resetGesture(circle_window[handIndex])
+                        pyautogui.press('r')
+                    else:
+                        circle_prev[handIndex] = avg
+            else:
+                if circle_start[handIndex] is not None:
+                    circle_start[handIndex] = None
+                    circle_prev[handIndex] = None
+    
+            #countdown[handIndex]
+            if countdown[handIndex] or fingerCount == 5:
+                if fingerCount == 0:
+                    countdown[handIndex] = False
+                    pyautogui.keyDown('command')
+                    pyautogui.press('w')
+                    pyautogui.keyUp('command')
+                elif fingerCount == 5:
+                    countdown[handIndex] = True
+                    last_finger[handIndex] = 5
+                    countdown_start_frame[handIndex] = window_index
+                elif fingerCount == last_finger[handIndex] or fingerCount == last_finger[handIndex] - 1:
+                    last_finger[handIndex] = fingerCount
+                    if window_index - countdown_start_frame[handIndex] > fps:
+                        countdown[handIndex] = False
+                else:
+                    countdown[handIndex] = False
+
+            #3-finger cursor
+            if fingerCount == 3 and ellipse is None and not countdown[handIndex]:
+                M = cv2.moments(largestContour)
+                x = int(M["m10"] / M["m00"])
+                y = int(M["m01"] / M["m00"])
+                finger3_window[handIndex][window_index % len(finger3_window[handIndex])] = (x, y)
+            else:
+                finger3_window[handIndex][window_index % len(finger3_window[handIndex])] = None
+            if isActive(finger3_window[handIndex]):
+                avg = avgTuples(finger3_window[handIndex])
+                if finger3_start[handIndex] == None:
+                    finger3_start[handIndex] = (avg, pyautogui.position())
+                else:
+                    (sX, sY), (cX, cY) = finger3_start[handIndex]
+                    x, y = avg
+                    scale = 3.0
+                    pyautogui.moveTo(cX - scale * (x - sX), cY + scale * (y - sY))
+            else:
+                if finger3_start[handIndex] is not None:
+                    finger3_start[handIndex] = None
+
+            #2-finger zoom
+            if fingerCount == 2 and not shaka and ellipse is None and not countdown[handIndex]:
+                zoom_window[window_index % len(zoom_window)] = (finger_angle,)
+            else:
+                zoom_window[window_index % len(zoom_window)] = None
+            if isActive(zoom_window):
+                #avg, = avgTuples(zoom_window)
+                avg = finger_angle
+                if previous_angle[handIndex] is None:
+                    previous_angle[handIndex] = avg
+                else:
+                    angleDiff = angleDifference(avg, previous_angle[handIndex])
+                    threshold = np.pi * (p["angle_threshold"][0]/180)
+                    clicks = 20
+                    #print(angleDiff*180/np.pi)
+
+                    if angleDiff > threshold:
+                        pyautogui.scroll(clicks)
+                    elif angleDiff < -threshold:
+                        pyautogui.scroll(-clicks)
+                    previous_angle[handIndex] = avg
+            else:
+                previous_angle[handIndex] = None
 
 
 
